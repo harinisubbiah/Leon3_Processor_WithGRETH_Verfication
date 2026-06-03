@@ -4,46 +4,6 @@
  *  Design  : GR-XC3S-1500
  *  Tool    : VCS (Linux)
  *  Compiler: sparc-gaisler-elf-gcc
- *
- *  FIXES FROM PREVIOUS VERSION:
- *
- *  FIX 1 — mdio_read: add pre-poll + fix NVALID check
- *    greth_api.c read_mii() does:
- *      poll BUSY → write command → poll BUSY → check NVALID → read data
- *    Previous code was missing the PRE-poll and had wrong NVALID logic.
- *    NVALID (bit2) = 0 means data IS valid (read it)
- *                  = 1 means data NOT valid (return error)
- *    Also: greth_api does ONE extra load after busy poll before
- *    checking NVALID. Added that too.
- *
- *  FIX 2 — mdio_write: add pre-poll
- *    greth_api.c write_mii() also polls BUSY before writing.
- *    Without pre-poll the write can corrupt an in-progress
- *    MDIO transaction. This was causing PHY CTRL to read back
- *    0x0000 after the loopback write.
- *
- *  FIX 3 — MDIO_LINKFAIL check removed from mdio_read
- *    When MDIO is working correctly bit2 (NVALID) is 0 after
- *    a valid read. The old check treated bit2=0 as link failure
- *    which is backwards. NVALID=0 = valid data, not a failure.
- *    The LINKFAIL check was incorrectly returning 0xDEAD for
- *    valid reads — that is why PHY IDs showed 0xDEAD.
- *
- *  FIX 4 — Test 5: reset GRETH and clear STATUS before setup
- *    After Test 4, GRETH still has TXEN/RXEN active and STATUS
- *    has stale flags. Test 5 needs a clean state. Added:
- *    greth_reset() + WR(GRETH_STATUS, 0xFF) before descriptor
- *    setup so GRETH starts fresh for the multi-frame test.
- *    This fixes frames 2 and 3 still owned by HW and frame 0
- *    data mismatch.
- *
- *  KEPT FROM PREVIOUS VERSION:
- *  - CTRL_100MB removed (bit7 only in RMII mode)
- *  - CTRL_PROM = (1<<5) correct per documentation
- *  - MDIO_PHYSHIFT=11, MDIO_REGSHIFT=6 correct per greth_api
- *  - Opcodes: |2 = READ, |1 = WRITE
- *  - Test 3 busy-poll: while(RD(GRETH_MDIO) & MDIO_BUSY)
- * ============================================================
  */
 
 #include <stdlib.h>
@@ -82,8 +42,10 @@
 #define STS_ERRORS      (STS_RXERR|STS_TXERR|STS_RXAHB|STS_TXAHB)
 
 /* MDIO register bits */
-#define MDIO_BUSY       (1 << 0)    /* poll this to wait */
-#define MDIO_NVALID     (1 << 2)    /* 0=data valid, 1=data invalid */
+#define MDIO_BUSY       (1 << 3)    /* poll this to wait */
+#define MDIO_LINKFAIL     (1 << 2)    /* 0=data valid, 1=data invalid */
+#define MDIO_WRITE      (1<<0)
+#define MDIO_READ       (1<<1)
 #define MDIO_PHYSHIFT   11          /* bits[15:11] = PHY address */
 #define MDIO_REGSHIFT   6           /* bits[10:6]  = register address */
 /* Opcodes in bits[1:0]: 01=WRITE, 10=READ */
@@ -152,64 +114,26 @@ static int mdio_wait(void)
 }
 
 /* ============================================================
- * mdio_read() — exact match of greth_api.c read_mii()
- *
- * greth_api pattern:
- *   do { tmp=load(mdio); } while (tmp & BUSY);  ← PRE-poll
- *   tmp = (phy<<11) | (reg<<6) | 2;
- *   save(mdio, tmp);
- *   do { tmp=load(mdio); } while (tmp & BUSY);  ← POST-poll
- *   if (!(tmp & NVALID)) {                       ← NVALID=0 means valid
- *       tmp = load(mdio);                        ← one more load
- *       return (tmp>>16) & 0xFFFF;
- *   } else return -1;
+ * mdio_read() 
  * ============================================================ */
 static unsigned int mdio_read(int phy, int reg)
 {
     unsigned int tmp;
-
-    /* FIX 1: PRE-poll — greth_api does this before every read */
+    WR(GRETH_MDIO, (phy << MDIO_PHYSHIFT) | ((reg & 0x1F) << MDIO_REGSHIFT) | MDIO_READ);
     if (mdio_wait() < 0) return 0xDEAD;
-
-    /* Write read command with READ opcode (|2) */
-    tmp = (phy << MDIO_PHYSHIFT) | ((reg & 0x1F) << MDIO_REGSHIFT) | 2;
-    WR(GRETH_MDIO, tmp);
-
-    /* POST-poll — wait for GRETH to complete the MDIO transaction */
-    if (mdio_wait() < 0) return 0xDEAD;
-
-    /* FIX 3: Check NVALID correctly — greth_api: if (!(tmp & NVALID))
-     * NVALID=0 means data IS valid, NVALID=1 means invalid.
-     * Old code had this backwards causing valid reads to return 0xDEAD */
-    tmp = RD(GRETH_MDIO);         /* one extra load as greth_api does */
-    if (tmp & MDIO_NVALID) return 0xDEAD;   /* bit2=1 = invalid */
     return (tmp >> 16) & 0xFFFF;             /* bit2=0 = valid, return data */
 }
 
 /* ============================================================
- * mdio_write() — exact match of greth_api.c write_mii()
- *
- * greth_api pattern:
- *   do { tmp=load(mdio); } while (tmp & BUSY);  ← PRE-poll
- *   tmp = (data<<16) | (phy<<11) | (reg<<6) | 1;
- *   save(mdio, tmp);
- *   do { tmp=load(mdio); } while (tmp & BUSY);  ← POST-poll
+ * mdio_write() 
  * ============================================================ */
 static void mdio_write(int phy, int reg, unsigned int val)
 {
     unsigned int tmp;
-
-    /* FIX 2: PRE-poll — greth_api does this before every write */
-    mdio_wait();
-
-    /* Write command with WRITE opcode (|1) */
-    tmp = ((val & 0xFFFF) << 16) |
+    WR(GRETH_MDIO,((val & 0xFFFF) << 16) |
           (phy << MDIO_PHYSHIFT)  |
           ((reg & 0x1F) << MDIO_REGSHIFT) |
-          1;                    /* WRITE opcode = binary 01 */
-    WR(GRETH_MDIO, tmp);
-
-    /* POST-poll — wait for GRETH to complete the MDIO write */
+          MDIO_WRITE);
     mdio_wait();
 }
 
@@ -358,12 +282,6 @@ static void test_single_frame_loopback(void)
 
 /* ============================================================
  * TEST 5: Multi-Frame Stress Loopback
- *
- * FIX 4: Reset GRETH and clear STATUS before setting up
- * descriptors. After Test 4, GRETH still has TXEN/RXEN active
- * and STATUS has stale IRQ flags. Without a clean reset GRETH
- * may process descriptors before all 4 are ready, causing
- * frame 0 data mismatch and frames 2/3 still owned by HW.
  * ============================================================ */
 static void test_multi_frame_loopback(void)
 {
@@ -371,12 +289,8 @@ static void test_multi_frame_loopback(void)
     unsigned int sts = 0;
     printf("\n--- TEST 5: Multi-Frame Stress Loopback (%d frames) ---\n",
            NUM_FRAMES);
-
-    /* FIX 4: Reset GRETH to clear active TX/RX state from Test 4 */
-    greth_reset();
-
-    /* FIX 4: Clear any stale STATUS flags before new test */
-    WR(GRETH_STATUS, 0xFF);
+    memset(txd,0,sizeof(txd));
+    memset(rxd,0,sizeof(rxd));
 
     /* Set up all descriptors BEFORE enabling GRETH */
     for (i = 0; i < NUM_FRAMES; i++) {
