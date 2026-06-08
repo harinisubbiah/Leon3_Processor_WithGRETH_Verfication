@@ -8,7 +8,8 @@ library ieee;
 use ieee.std_logic_1164.all;
 use ieee.numeric_std.all;
 use work.bridge_pkg.all;
-
+-- use work.ahb_bridge_pkg.all;
+-- use work.apb_bridge_pkg.all;
 entity tb_bridge_top is
 -- Testbench has no ports
 end entity tb_bridge_top;
@@ -87,7 +88,7 @@ architecture sim of tb_bridge_top is
   -- ============================================================
   -- DUT Component Declaration
   -- ============================================================
-  component eth_module is
+  component bridge_module is
     generic (
       constant SRAMBANKS : integer := 4;
       constant TACC      : integer := 10;
@@ -149,7 +150,7 @@ begin
   -- ============================================================
   -- DUT Instantiation
   -- ============================================================
-  DUT : eth_module
+  DUT : bridge_module
     generic map (
       SRAMBANKS => 4,
       TACC      => 10,
