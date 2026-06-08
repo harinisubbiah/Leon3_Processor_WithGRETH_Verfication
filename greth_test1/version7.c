@@ -4,46 +4,6 @@
  *  Design  : GR-XC3S-1500
  *  Tool    : VCS (Linux)
  *  Compiler: sparc-gaisler-elf-gcc
- *
- *  FIXES IN THIS VERSION:
- *
- *  FIX 1 — Separate TX and RX enable to avoid AHB bus conflict.
- *    Previous code enabled CTRL_TXEN|CTRL_RXEN together and then
- *    re-wrote both inside the TX IRQ handler. This caused GRETH's
- *    TX and RX DMA engines to compete for the same AHB bus at the
- *    same time — resulting in AHB errors on frame 2 onwards.
- *    Fix: Enable only CTRL_TXEN first, wait for ALL TX to finish,
- *    then enable only CTRL_RXEN for RX. The loopback frames
- *    accumulate in the PHY/MAC receive FIFO while TX runs and
- *    are drained when RX is enabled after.
- *
- *  FIX 2 — Re-assert only the relevant enable bit on each IRQ.
- *    When STS_TXIRQ fires, only re-write CTRL_TXEN (not RXEN).
- *    When STS_RXIRQ fires, only re-write CTRL_RXEN (not TXEN).
- *    This stops each engine from interfering with the other.
- *
- *  FIX 3 — Break immediately on AHB errors, not on STS_ERRORS.
- *    Writing STS_ERRORS to STATUS clears the error bits but
- *    GRETH has already disabled itself — TXIRQ/RXIRQ never fires
- *    so the poll loop hangs for TIMEOUT*NUM_FRAMES cycles.
- *    Fix: check each error bit individually and break instantly
- *    with a descriptive print so we know exactly what failed.
- *
- *  FIX 4 — tx_ok flag set correctly.
- *    Previously tx_ok=1 was set inside if(STS_TXIRQ) which only
- *    fires once per frame — not reliable for multi-frame.
- *    tx_ok is now only set when ALL descriptor EN bits are clear.
- *    Same fix applied to rx_ok.
- *
- *  FIX 5 — Test 1 does not write CTRL_TXEN|CTRL_RXEN.
- *    Without descriptors GRETH self-clears TE/RE immediately.
- *    Test 1 only checks register access so only CTRL_FULLD
- *    is written to verify bit4 sticks.
- *
- *  FIX 6 — RX descriptor ctrl has no length field.
- *    PDF: LENGTH in RX descriptor word 0 is written BY GRETH
- *    after reception to show bytes received. It should be 0
- *    when we set up the descriptor — we do not pre-fill it.
  * ============================================================
  */
 
@@ -147,21 +107,18 @@ static int mdio_wait(void)
 static unsigned int mdio_read(int phy, int reg)
 {
     unsigned int tmp;
-    if (mdio_wait() < 0) return 0xDEAD;
     tmp = (phy << MDIO_PHYSHIFT) |
           ((reg & 0x1F) << MDIO_REGSHIFT) |
           MDIO_READ;
     WR(GRETH_MDIO, tmp);
     if (mdio_wait() < 0) return 0xDEAD;
     tmp = RD(GRETH_MDIO);
-    if (tmp & MDIO_LINKFAIL) return 0xDEAD;
     return (tmp >> 16) & 0xFFFF;
 }
 
 static void mdio_write(int phy, int reg, unsigned int val)
 {
     unsigned int tmp;
-    mdio_wait();
     tmp = ((val & 0xFFFF) << 16) |
           (phy  << MDIO_PHYSHIFT)  |
           ((reg & 0x1F) << MDIO_REGSHIFT) |
@@ -206,7 +163,6 @@ static void test_greth_registers(void)
     check("MAC MSB write-readback", RD(GRETH_MACMSB) == 0x00000200);
     check("MAC LSB write-readback", RD(GRETH_MACLSB) == 0x00000008);
 
-    /* FIX 5: Only FULLD — no TE/RE without descriptors */
     WR(GRETH_CTRL, CTRL_FULLD);
     v = RD(GRETH_CTRL);
     check("Full-duplex bit set", v & CTRL_FULLD);
@@ -267,45 +223,31 @@ static void test_single_frame_loopback(void)
     txd[0].addr = (unsigned int)txbuf[0];
     txd[0].ctrl = DESC_EN | DESC_WRAP | FRAME_SIZE;
 
-    /* FIX 6: RX descriptor — no length, GRETH fills it in */
     rxd[0].addr = (unsigned int)rxbuf[0];
-    rxd[0].ctrl = DESC_EN | DESC_WRAP;
+    rxd[0].ctrl = DESC_EN | DESC_WRAP | 128;
 
     WR(GRETH_TXDESC, (unsigned int)txd);
     WR(GRETH_RXDESC, (unsigned int)rxd);
     WR(GRETH_STATUS, 0xFF);
 
-    /* FIX 1: Enable TX only first */
-    WR(GRETH_CTRL, CTRL_TXEN | CTRL_FULLD | CTRL_PROM);
+    WR(GRETH_CTRL, CTRL_TXEN | CTRL_RXEN | CTRL_FULLD | CTRL_PROM);
 
     int tx_ok = 0;
     for (i = 0; i < TIMEOUT; i++) {
         sts = RD(GRETH_STATUS);
         if (sts & STS_TXIRQ)  { tx_ok = 1; break; }
-        if (sts & STS_TXAHB)  {
-            printf("    TX AHB error (STATUS=0x%08X)\n", sts);
-            break;
-        }
-        if (sts & STS_TXERR)  { break; }
+        if (sts & STS_ERRORS) { break; }
     }
-    WR(GRETH_STATUS, STS_TXIRQ | STS_TXERR | STS_TXAHB);
+    WR(GRETH_STATUS, STS_TXIRQ);
     check("Single frame TX completed", tx_ok);
     check("No TX errors", !(sts & (STS_TXERR|STS_TXAHB)));
-
-    /* FIX 1: Now enable RX only */
-    WR(GRETH_CTRL, CTRL_RXEN | CTRL_FULLD | CTRL_PROM);
-
     int rx_ok = 0;
     for (i = 0; i < TIMEOUT; i++) {
         sts = RD(GRETH_STATUS);
         if (sts & STS_RXIRQ)  { rx_ok = 1; break; }
-        if (sts & STS_RXAHB)  {
-            printf("    RX AHB error (STATUS=0x%08X)\n", sts);
-            break;
-        }
-        if (sts & STS_RXERR)  { break; }
+        if (sts & STS_ERRORS) { break; }
     }
-    WR(GRETH_STATUS, STS_RXIRQ | STS_RXERR | STS_RXAHB);
+    WR(GRETH_STATUS, STS_RXIRQ);
     check("Single frame RX completed", rx_ok);
     check("No RX errors", !(sts & (STS_RXERR|STS_RXAHB)));
 
@@ -327,16 +269,6 @@ static void test_single_frame_loopback(void)
 
 /* ============================================================
  * TEST 5: Multi-Frame Stress Loopback
- *
- * FIX 1: TX phase uses CTRL_TXEN only.
- *         RX phase uses CTRL_RXEN only.
- *         This prevents TX/RX DMA from fighting over AHB bus.
- *
- * FIX 2: Re-assert only the relevant enable bit per IRQ.
- *
- * FIX 3: Break immediately on AHB error with a print.
- *
- * FIX 4: tx_ok/rx_ok only set when ALL descriptors are done.
  * ============================================================ */
 static void test_multi_frame_loopback(void)
 {
@@ -351,11 +283,9 @@ static void test_multi_frame_loopback(void)
     printf("    txbuf@ 0x%08X\n", (unsigned int)txbuf);
     printf("    rxbuf@ 0x%08X\n", (unsigned int)rxbuf);
 
-    /* Clear descriptor memory */
     memset(txd, 0, sizeof(txd));
     memset(rxd, 0, sizeof(rxd));
 
-    /* Set up all descriptors */
     for (i = 0; i < NUM_FRAMES; i++) {
         fill_eth_header(txbuf[i], i);
         memset(rxbuf[i], 0, FRAME_SIZE);
@@ -365,7 +295,7 @@ static void test_multi_frame_loopback(void)
 
         /* FIX 6: RX descriptor — no length field */
         rxd[i].addr = (unsigned int)rxbuf[i];
-        rxd[i].ctrl = DESC_EN;
+        rxd[i].ctrl = DESC_EN | 128;
 
         if (i == NUM_FRAMES - 1) {
             txd[i].ctrl |= DESC_WRAP;
@@ -378,23 +308,17 @@ static void test_multi_frame_loopback(void)
     WR(GRETH_RXDESC, (unsigned int)rxd);
     WR(GRETH_STATUS, 0xFF);
 
-    /* --------------------------------------------------------
-     * TX PHASE — CTRL_TXEN only, no RXEN
-     * FIX 1: Only TX DMA runs, no AHB contention with RX DMA
-     * -------------------------------------------------------- */
-    WR(GRETH_CTRL, CTRL_TXEN | CTRL_FULLD | CTRL_PROM);
+    WR(GRETH_CTRL, CTRL_TXEN | CTRL_RXEN | CTRL_FULLD | CTRL_PROM);
 
     int tx_ok = 0;
     for (i = 0; i < TIMEOUT * NUM_FRAMES; i++) {
         sts = RD(GRETH_STATUS);
 
-        if (sts & STS_TXIRQ) {
+        if (sts & STS_TXIRQ) 
+        {
             WR(GRETH_STATUS, STS_TXIRQ);
-            /* FIX 2: re-assert only TXEN so GRETH continues */
-            WR(GRETH_CTRL, CTRL_TXEN | CTRL_FULLD | CTRL_PROM);
+            delay(100);
         }
-
-        /* FIX 3: break immediately on AHB error */
         if (sts & STS_TXAHB) {
             printf("    TX AHB error at frame %d (STATUS=0x%08X)\n",
                    i, sts);
@@ -406,40 +330,26 @@ static void test_multi_frame_loopback(void)
             WR(GRETH_STATUS, STS_TXERR);
             break;
         }
-
-        /* FIX 4: tx_ok only when ALL EN bits cleared */
+        WR(GRETH_CTRL, CTRL_TXEN | CTRL_FULLD | CTRL_PROM);
         int all_done = 1;
         for (j = 0; j < NUM_FRAMES; j++)
             if (txd[j].ctrl & DESC_EN) { all_done = 0; break; }
         if (all_done) { tx_ok = 1; break; }
     }
 
-    /* Print each TX descriptor status for debug */
     for (j = 0; j < NUM_FRAMES; j++)
         printf("    txd[%d].ctrl = 0x%08X\n", j, txd[j].ctrl);
 
     check("All TX frames sent",      tx_ok);
     check("No TX errors (stress)", !(sts & (STS_TXERR|STS_TXAHB)));
-
-    /* --------------------------------------------------------
-     * RX PHASE — CTRL_RXEN only, no TXEN
-     * FIX 1: Loopback frames waiting in RX FIFO are now drained.
-     * Only RX DMA runs — no AHB contention with TX DMA.
-     * -------------------------------------------------------- */
-    WR(GRETH_STATUS, 0xFF);
-    WR(GRETH_CTRL, CTRL_RXEN | CTRL_FULLD | CTRL_PROM);
-
     int rx_ok = 0;
     for (i = 0; i < TIMEOUT * NUM_FRAMES; i++) {
         sts = RD(GRETH_STATUS);
 
         if (sts & STS_RXIRQ) {
             WR(GRETH_STATUS, STS_RXIRQ);
-            /* FIX 2: re-assert only RXEN so GRETH continues */
-            WR(GRETH_CTRL, CTRL_RXEN | CTRL_FULLD | CTRL_PROM);
+            delay(100);
         }
-
-        /* FIX 3: break immediately on AHB error */
         if (sts & STS_RXAHB) {
             printf("    RX AHB error at frame %d (STATUS=0x%08X)\n",
                    i, sts);
@@ -451,8 +361,7 @@ static void test_multi_frame_loopback(void)
             WR(GRETH_STATUS, STS_RXERR);
             break;
         }
-
-        /* FIX 4: rx_ok only when ALL EN bits cleared */
+        WR(GRETH_CTRL, CTRL_TXEN | CTRL_RXEN | CTRL_FULLD | CTRL_PROM);
         int all_done = 1;
         for (j = 0; j < NUM_FRAMES; j++)
             if (rxd[j].ctrl & DESC_EN) { all_done = 0; break; }
