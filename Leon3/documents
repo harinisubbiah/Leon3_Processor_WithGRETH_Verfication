@@ -1,1 +1,47 @@
 Leon3 Research.
+:
+
+/* === STEP 1: Setup descriptors (same as before) === */
+memset(txd, 0, sizeof(txd));
+memset(rxd, 0, sizeof(rxd));
+
+for (i = 0; i < NUM_FRAMES; i++) {
+    fill_eth_header(txbuf[i], i);
+    memset(rxbuf[i], 0, FRAME_SIZE);
+    txd[i].addr = (unsigned int)txbuf[i];
+    txd[i].ctrl = DESC_EN | FRAME_SIZE;
+    rxd[i].addr = (unsigned int)rxbuf[i];
+    rxd[i].ctrl = DESC_EN;
+    if (i == NUM_FRAMES - 1) {
+        txd[i].ctrl |= DESC_WRAP;
+        rxd[i].ctrl |= DESC_WRAP;
+    }
+}
+
+/* === STEP 2: Flush cache so GRETH can see descriptors in SRAM === */
+asm volatile("sta %%g0, [%%g0]0x11" : : : "memory");
+asm volatile("nop; nop; nop; nop");
+
+/* === STEP 3: Set pointers, clear status, enable === */
+WR(GRETH_TXDESC, (unsigned int)txd);
+WR(GRETH_RXDESC, (unsigned int)rxd);
+WR(GRETH_STATUS, 0xFF);
+WR(GRETH_CTRL, CTRL_TXEN | CTRL_RXEN | CTRL_FULLD | CTRL_PROM);
+
+/* === STEP 4: TX poll loop — re-assert CTRL every iteration === */
+int tx_ok = 0;
+for (i = 0; i < TIMEOUT * NUM_FRAMES; i++) {
+    sts = RD(GRETH_STATUS);
+
+    if (sts & STS_TXIRQ)  { WR(GRETH_STATUS, STS_TXIRQ); }
+    if (sts & STS_TXAHB)  { printf("TX AHB error\n"); WR(GRETH_STATUS, STS_TXAHB); break; }
+    if (sts & STS_TXERR)  { WR(GRETH_STATUS, STS_TXERR); break; }
+
+    /* KEY FIX: re-assert TXEN every iteration, not just on TXIRQ */
+    WR(GRETH_CTRL, CTRL_TXEN | CTRL_RXEN | CTRL_FULLD | CTRL_PROM);
+
+    int all_done = 1;
+    for (j = 0; j < NUM_FRAMES; j++)
+        if (txd[j].ctrl & DESC_EN) { all_done = 0; break; }
+    if (all_done) { tx_ok = 1; break; }
+}
