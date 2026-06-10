@@ -93,7 +93,12 @@ static void check(const char *name, int condition)
         fail_count++;
     }
 }
-
+static inline unsigned int load_bypass(unsigned int addr)
+{
+    unsigned int tmp;
+    asm volatile("lda [%1]1, %0" : "=r"(tmp) : "r"(addr));
+    return tmp;
+}
 static void delay(volatile int n) { while (n-- > 0); }
 
 static int mdio_wait(void)
@@ -311,17 +316,17 @@ static void test_multi_frame_loopback(void)
     WR(GRETH_CTRL, CTRL_TXEN | CTRL_RXEN | CTRL_FULLD | CTRL_PROM);
 
     int tx_ok = 0;
+    
     for (i = 0; i < TIMEOUT * NUM_FRAMES; i++) {
-        sts = RD(GRETH_STATUS);
-
-        if (sts & STS_TXIRQ) 
-        {
+    
+        // bypass cache for STATUS register
+        sts = load_bypass(GRETH_STATUS);
+    
+        if (sts & STS_TXIRQ) {
             WR(GRETH_STATUS, STS_TXIRQ);
-            delay(50000);
         }
         if (sts & STS_TXAHB) {
-            printf("    TX AHB error at frame %d (STATUS=0x%08X)\n",
-                   i, sts);
+            printf("    TX AHB error (STATUS=0x%08X)\n", sts);
             WR(GRETH_STATUS, STS_TXAHB);
             break;
         }
@@ -330,13 +335,15 @@ static void test_multi_frame_loopback(void)
             WR(GRETH_STATUS, STS_TXERR);
             break;
         }
-        WR(GRETH_CTRL, CTRL_TXEN | CTRL_FULLD | CTRL_PROM);
+    
+        // bypass cache for ALL descriptor ctrl reads
         int all_done = 1;
-        for (j = 0; j < NUM_FRAMES; j++)
-            if (txd[j].ctrl & DESC_EN) { all_done = 0; break; }
+        for (j = 0; j < NUM_FRAMES; j++) {
+            unsigned int ctrl = load_bypass((unsigned int)&txd[j].ctrl);
+            if (ctrl & DESC_EN) { all_done = 0; break; }
+        }
         if (all_done) { tx_ok = 1; break; }
     }
-
     for (j = 0; j < NUM_FRAMES; j++)
         printf("    txd[%d].ctrl = 0x%08X\n", j, txd[j].ctrl);
 
@@ -344,15 +351,14 @@ static void test_multi_frame_loopback(void)
     check("No TX errors (stress)", !(sts & (STS_TXERR|STS_TXAHB)));
     int rx_ok = 0;
     for (i = 0; i < TIMEOUT * NUM_FRAMES; i++) {
-        sts = RD(GRETH_STATUS);
-
+    
+        sts = load_bypass(GRETH_STATUS);
+    
         if (sts & STS_RXIRQ) {
             WR(GRETH_STATUS, STS_RXIRQ);
-            delay(50000);
         }
         if (sts & STS_RXAHB) {
-            printf("    RX AHB error at frame %d (STATUS=0x%08X)\n",
-                   i, sts);
+            printf("    RX AHB error (STATUS=0x%08X)\n", sts);
             WR(GRETH_STATUS, STS_RXAHB);
             break;
         }
@@ -361,13 +367,14 @@ static void test_multi_frame_loopback(void)
             WR(GRETH_STATUS, STS_RXERR);
             break;
         }
-        WR(GRETH_CTRL, CTRL_TXEN | CTRL_RXEN | CTRL_FULLD | CTRL_PROM);
+    
         int all_done = 1;
-        for (j = 0; j < NUM_FRAMES; j++)
-            if (rxd[j].ctrl & DESC_EN) { all_done = 0; break; }
+        for (j = 0; j < NUM_FRAMES; j++) {
+            unsigned int ctrl = load_bypass((unsigned int)&rxd[j].ctrl);
+            if (ctrl & DESC_EN) { all_done = 0; break; }
+        }
         if (all_done) { rx_ok = 1; break; }
     }
-
     /* Print each RX descriptor status for debug */
     for (j = 0; j < NUM_FRAMES; j++)
         printf("    rxd[%d].ctrl = 0x%08X  (len=%d bytes)\n",
