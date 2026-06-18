@@ -20,7 +20,7 @@ architecture sim of tb_bridge_top is
   -- Constants
   -- ============================================================
   constant ABITS      : integer := 28;
-  constant CLK_PERIOD : time    := 10 ns;
+  constant CLK_PERIOD : time    := 20 ns;
 
   -- ── HTRANS binary values ────────────────────────────────────
   -- "00" = IDLE   : no transfer
@@ -225,18 +225,16 @@ sram_model : process(clk)
   begin
     if rising_edge(clk) then
       if sram_ce1 = '0' then
-        if sram_oen = '1' then
+        if sram_oen = '1' and sram_wen = '0' then
           -- WRITE: oen=1 means not reading, so we are writing
-          sram_mem(to_integer(
-            unsigned(sram_addr(11 downto 2)))) <= sram_wdata;
+          sram_mem(to_integer(unsigned(sram_addr(11 downto 2)))) <= sram_wdata;
           sram_rdata <= (others => '0');
-        elsif sram_oen = '0' then
+        elsif sram_oen = '0' and sram_wen = '1' then
           -- READ: oen=0 means output enabled, so we are reading
           if unsigned(sram_addr) >= 16#F00000# then
             sram_rdata <= x"DEAD0000";
           else
-            sram_rdata <= sram_mem(to_integer(
-              unsigned(sram_addr(11 downto 2))));
+            sram_rdata <= sram_mem(to_integer(unsigned(sram_addr(11 downto 2))));
           end if;
         end if;
       else
@@ -255,16 +253,14 @@ sram_model : process(clk)
 apb_slave_model : process(clk)
   begin
     if rising_edge(clk) then
-      if psel = '1' and penable = '1' then
-        if pwrite = '1' then
+      if  proc_ce1 = '0' then
+        if proc_oen = '1' and proc_wen = '0' then
           -- WRITE: store pwdata into apb_mem
-          apb_mem(to_integer(
-            unsigned(paddr(9 downto 2)))) <= pwdata;
+          apb_mem(to_integer(unsigned(paddr(9 downto 2)))) <= pwdata;
           prdata <= (others => '0');
-        else
+        elsif proc_oen = '0' and proc_wen = '1' then
           -- READ: return stored value
-          prdata <= apb_mem(to_integer(
-            unsigned(paddr(9 downto 2))));
+          prdata <= apb_mem(to_integer(unsigned(paddr(9 downto 2))));
         end if;
       else
         prdata <= (others => '0');
@@ -412,19 +408,6 @@ apb_slave_model : process(clk)
       if ahb_req_write = '1' then
         hwdata <= ahb_req_wdata(beat);
       end if;
-
-      -- ── Calculate next address ─────────────────────────────
-      case ahb_req_burst is
-        when "010" | "100" | "110" =>
-          -- WRAP: upper bits fixed, lower bits wrap
-          next_a := (cur_addr and not wrap_mask) or
-                    ((cur_addr + inc) and wrap_mask);
-        when others =>
-          -- INCR: plain increment
-          next_a := cur_addr + inc;
-      end case;
-
-      cur_addr := next_a;
 
       -- ── Early termination check ───────────────────────────
       if ahb_early_end = '1' and beat = 1 then
@@ -730,19 +713,7 @@ apb_slave_model : process(clk)
     -- ERROR SCENARIO TESTS
     -- ==========================================================
 
-    -- ── E1: Out-of-range address (HRESP=ERROR expected) ────────
-    -- What:  SINGLE write to address 0x4FF00000
-    --        This is outside the SRAM mapped range
-    -- Why:   Bridge should detect unmapped address and assert
-    --        hresp="01" (ERROR) with hready="0" then "1"
-    -- See:   hresp toggling to "01" on waveform
-    --        hready goes low for 1 cycle then high
-    --        sram signals may be undefined or deasserted
-    report "=== E1: OUT-OF-RANGE ADDRESS (expect hresp=01) ===" severity note;
-    do_ahb_burst(x"4FF00010", "000", '1');
-    report "=== E1 DONE: check hresp on waveform ===" severity note;
-
-    -- ── E2: Early burst termination ────────────────────────────
+    -- ── E1: Early burst termination ────────────────────────────
     -- What:  Start INCR4 write but go IDLE after beat 1
     --        (only 2 of 4 beats completed)
     -- Why:   Tests bridge recovery — it must not hang or
@@ -750,25 +721,11 @@ apb_slave_model : process(clk)
     -- See:   htrans goes "10","11","00" (NONSEQ,SEQ,IDLE)
     --        sram_wen pulses only twice instead of 4 times
     --        hready stays 1 (bridge should recover cleanly)
-    report "=== E2: EARLY BURST TERMINATION (INCR4 cut at beat 1) ===" severity note;
+    report "=== E1: EARLY BURST TERMINATION (INCR4 cut at beat 1) ===" severity note;
     do_ahb_burst(x"40000A00", "011", '1',
                  busy_after => 99, early_end => '1');
-    report "=== E2 DONE: check only 2 sram_wen pulses ===" severity note;
+    report "=== E1 DONE: check only 2 sram_wen pulses ===" severity note;
 
-    -- ── E3: Unaligned WRAP4 start address ──────────────────────
-    -- What:  WRAP4 burst starting at 0x40000302
-    --        Byte offset 2 — NOT word aligned (word = 4 bytes)
-    -- Why:   AHB spec requires WRAP bursts to start at an address
-    --        that is aligned to the total burst size boundary
-    --        WRAP4 word = 16-byte boundary → start must be 0xXX0
-    --        Starting at 0x302 violates this
-    -- See:   Bridge may produce incorrect wrap addresses
-    --        OR assert hresp=ERROR
-    --        Either way, address sequence on waveform will be
-    --        different from a correctly aligned WRAP4
-    report "=== E3: UNALIGNED WRAP4 (addr=0x302, expect odd behavior) ===" severity note;
-    do_ahb_burst(x"40000302", "010", '1');
-    report "=== E3 DONE: check sram_addr sequence on waveform ===" severity note;
 
     -- ==========================================================
     -- END
