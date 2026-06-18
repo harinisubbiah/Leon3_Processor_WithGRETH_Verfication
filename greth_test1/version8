@@ -111,24 +111,14 @@ static int mdio_wait(void)
 
 static unsigned int mdio_read(int phy, int reg)
 {
-    unsigned int tmp;
-    tmp = (phy << MDIO_PHYSHIFT) |
-          ((reg & 0x1F) << MDIO_REGSHIFT) |
-          MDIO_READ;
-    WR(GRETH_MDIO, tmp);
+    WR(GRETH_MDIO, (phy << MDIO_PHYSHIFT) | ((reg & 0x1F) << MDIO_REGSHIFT) | MDIO_READ);
     if (mdio_wait() < 0) return 0xDEAD;
-    tmp = RD(GRETH_MDIO);
-    return (tmp >> 16) & 0xFFFF;
+    return (RD(GRETH_MDIO) >> 16) & 0xFFFF;
 }
 
 static void mdio_write(int phy, int reg, unsigned int val)
 {
-    unsigned int tmp;
-    tmp = ((val & 0xFFFF) << 16) |
-          (phy  << MDIO_PHYSHIFT)  |
-          ((reg & 0x1F) << MDIO_REGSHIFT) |
-          MDIO_WRITE;
-    WR(GRETH_MDIO, tmp);
+    WR(GRETH_MDIO, ((val & 0xFFFF) << 16) | (phy  << MDIO_PHYSHIFT)  | ((reg & 0x1F) << MDIO_REGSHIFT) | MDIO_WRITE);
     mdio_wait();
 }
 
@@ -168,8 +158,10 @@ static void test_greth_registers(void)
     check("MAC MSB write-readback", RD(GRETH_MACMSB) == 0x00000200);
     check("MAC LSB write-readback", RD(GRETH_MACLSB) == 0x00000008);
 
-    WR(GRETH_CTRL, CTRL_FULLD);
+    WR(GRETH_CTRL, CTRL_TXEN | CTRL_RXEN | CTRL_FULLD);
     v = RD(GRETH_CTRL);
+    check("TX bit set", v & CTRL_TXEN);
+    check("RX bit set", v & CTRL_RXEN);
     check("Full-duplex bit set", v & CTRL_FULLD);
 }
 
@@ -189,8 +181,8 @@ static void test_phy_mdio_read(void)
     printf("    PHY ID2     = 0x%04X\n", id2);
     printf("    PHY STATUS  = 0x%04X\n", sts);
 
-    check("PHY ID1 not 0xFFFF", id1 != 0xFFFF);
-    check("PHY ID2 not 0xFFFF", id2 != 0xFFFF);
+    check("PHY ID1 not 0xFFFF", id1 == 0xBBCD);
+    check("PHY ID2 not 0xFFFF", id2 == 0x9C83);
     check("PHY STATUS readable", sts != 0xDEAD);
     check("No MDIO link failure", !(RD(GRETH_MDIO) & MDIO_LINKFAIL));
 }
@@ -209,8 +201,7 @@ static void test_phy_loopback_mode(void)
 
     ctrl = mdio_read(PHY_ADDR, PHY_CTRL);
     printf("    PHY CTRL after write = 0x%04X\n", ctrl);
-    check("PHY loopback bit confirmed via readback",
-          ctrl & PHY_CTRL_LOOPBACK);
+    check("PHY loopback bit confirmed via readback",ctrl & PHY_CTRL_LOOPBACK);
 }
 
 /* ============================================================
@@ -233,7 +224,6 @@ static void test_single_frame_loopback(void)
 
     WR(GRETH_TXDESC, (unsigned int)txd);
     WR(GRETH_RXDESC, (unsigned int)rxd);
-    WR(GRETH_STATUS, 0xFF);
 
     WR(GRETH_CTRL, CTRL_TXEN | CTRL_RXEN | CTRL_FULLD | CTRL_PROM);
 
@@ -282,12 +272,6 @@ static void test_multi_frame_loopback(void)
     printf("\n--- TEST 5: Multi-Frame Stress Loopback (%d frames) ---\n",
            NUM_FRAMES);
 
-    /* Print buffer addresses to confirm they are in AHB-reachable SRAM */
-    printf("    txd  @ 0x%08X\n", (unsigned int)txd);
-    printf("    rxd  @ 0x%08X\n", (unsigned int)rxd);
-    printf("    txbuf@ 0x%08X\n", (unsigned int)txbuf);
-    printf("    rxbuf@ 0x%08X\n", (unsigned int)rxbuf);
-
     memset(txd, 0, sizeof(txd));
     memset(rxd, 0, sizeof(rxd));
 
@@ -298,7 +282,6 @@ static void test_multi_frame_loopback(void)
         txd[i].addr = (unsigned int)txbuf[i];
         txd[i].ctrl = DESC_EN | FRAME_SIZE;
 
-        /* FIX 6: RX descriptor — no length field */
         rxd[i].addr = (unsigned int)rxbuf[i];
         rxd[i].ctrl = DESC_EN | 128;
 
@@ -344,8 +327,6 @@ static void test_multi_frame_loopback(void)
         }
         if (all_done) { tx_ok = 1; break; }
     }
-    for (j = 0; j < NUM_FRAMES; j++)
-        printf("    txd[%d].ctrl = 0x%08X\n", j, txd[j].ctrl);
 
     check("All TX frames sent",      tx_ok);
     check("No TX errors (stress)", !(sts & (STS_TXERR|STS_TXAHB)));
@@ -375,10 +356,6 @@ static void test_multi_frame_loopback(void)
         }
         if (all_done) { rx_ok = 1; break; }
     }
-    /* Print each RX descriptor status for debug */
-    for (j = 0; j < NUM_FRAMES; j++)
-        printf("    rxd[%d].ctrl = 0x%08X  (len=%d bytes)\n",
-               j, rxd[j].ctrl, rxd[j].ctrl & 0x7FF);
 
     check("All RX frames received",  rx_ok);
     check("No RX errors (stress)", !(sts & (STS_RXERR|STS_RXAHB)));
