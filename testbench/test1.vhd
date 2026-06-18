@@ -20,7 +20,7 @@ architecture sim of tb_bridge_top is
   -- Constants
   -- ============================================================
   constant ABITS      : integer := 28;
-  constant CLK_PERIOD : time    := 10 ns;
+  constant CLK_PERIOD : time    := 20 ns;
 
   -- ============================================================
   -- DUT port signals
@@ -90,10 +90,7 @@ architecture sim of tb_bridge_top is
   -- ============================================================
   component bridge_module is
     generic (
-      constant SRAMBANKS : integer := 4;
-      constant TACC      : integer := 10;
       constant ABITS     : integer := 28;
-      constant sram_file : string  := "sram.srec"
     );
     port (
       clk, rst   : in  std_logic;
@@ -152,10 +149,7 @@ begin
   -- ============================================================
   DUT : bridge_module
     generic map (
-      SRAMBANKS => 4,
-      TACC      => 10,
       ABITS     => 28,
-      sram_file => "sram.srec"
     )
     port map (
       clk        => clk,
@@ -214,14 +208,9 @@ begin
   -- ============================================================
   sram_model : process(sram_ce1, sram_oen, sram_addr)
   begin
-    if sram_ce1 = '0' and sram_oen = '0' then
+    if sram_ce1 = '0' and sram_oen = '0' and sram_wen ='1' then
       -- Return address-dependent read data so we can verify
-      sram_rdata <= std_logic_vector(
-                      unsigned(sram_addr(7 downto 0)) &
-                      x"AB" &
-                      x"CD" &
-                      x"EF"
-                    );
+      sram_rdata <= std_logic_vector(unsigned(sram_addr(7 downto 0)) & x"AB" & x"CD" & x"EF");
     else
       sram_rdata <= (others => '0');
     end if;
@@ -234,9 +223,11 @@ begin
   apb_slave_model : process(psel, penable, pwdata)
   begin
     if psel = '1' and penable = '1' then
+      if proc_ce1 = '0' and proc_oen = '0' and proc_wen ='1' then
       prdata <= pwdata; -- Echo write data back as read data
-    else
+      else
       prdata <= x"FACE_CAFE";
+      end if;
     end if;
   end process;
 
