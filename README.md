@@ -1,4 +1,4 @@
-<img width="919" height="710" alt="image" src="https://github.com/user-attachments/assets/d1436fc5-757e-46d0-a2ef-0624626806f4" /># Development of Memory Interface Bridge for AMBA-Based Ethernet MAC
+# Development of Memory Interface Bridge for AMBA-Based Ethernet MAC
 
 Functional Verification, ASIC Synthesis and Formal Verification of an AMBA Memory Interface Bridge integrated with the LEON3 Processor and GRETH Ethernet MAC.
 
