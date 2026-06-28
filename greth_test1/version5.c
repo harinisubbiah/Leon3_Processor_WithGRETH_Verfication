@@ -4,45 +4,7 @@
  *  Design  : GR-XC3S-1500
  *  Tool    : VCS (Linux)
  *  Compiler: sparc-gaisler-elf-gcc
- *
- *  FIXES IN THIS VERSION (based on GRETH_DETAILS.pdf + debug):
- *
- *  FIX 1 — MDIO bit positions corrected from PDF Table 801:
- *    bit3 = BUSY (BU)   ← was wrongly bit0 before
- *    bit2 = Linkfail (LF) — reset value is '1' (normal after reset)
- *    bit1 = Read  (RD)  ← READ  opcode = (1<<1) = 2
- *    bit0 = Write (WR)  ← WRITE opcode = (1<<0) = 1
- *    bits[15:11] = PHYADDR, bits[10:6] = REGADDR  (confirmed correct)
- *
- *  FIX 2 — EDCL duplex detection FSM must be disabled (CTRL bit12)
- *    From PDF: "Disable duplex detection (DD) bit12 - Disable the
- *    EDCL speed/duplex detection FSM."
- *    Your design has EDCL present (CTRL bit31=1 confirmed by your
- *    0x4000013 value). The FSM runs automatically after reset and
- *    issues its own MDIO transactions to detect PHY speed/duplex,
- *    then WRITES those results back into CTRL — overwriting whatever
- *    we set including the PROM bit. This is why:
- *    - CTRL goes 0x4000013 → 0x4000011 → 0x4000010 (FSM cleared RE)
- *    - PROM bit never sticks (FSM rewrites CTRL without PROM)
- *    - Only 2 of 4 RX frames received (RX stopped when PROM cleared)
- *    - Frame 0 data mismatch (EDCL intercepting some frames)
- *    FIX: Write CTRL_DD=(1<<12) immediately after reset BEFORE any
- *    other CTRL writes. This stops the FSM permanently.
- *    From PDF: "Note that the FSM cannot be re-enabled again."
- *
- *  FIX 3 — Linkfail check updated
- *    PDF says LF reset value is '1' — so it is SET after reset and
- *    only clears after a successful MDIO operation. The check
- *    !(RD(GRETH_MDIO) & MDIO_LINKFAIL) is correct — just needs
- *    to run after MDIO reads in Test 2, not before.
- *
- *  FIX 4 — Test 5 descriptor clear with memset (your working fix)
- *    memset(txd,0,sizeof(txd)) and memset(rxd,0,sizeof(rxd))
- *    before setting up new descriptors clears any leftover state.
- *
- *  KEPT: MDIO_PHYSHIFT=11, MDIO_REGSHIFT=6, MDIO_BUSY=(1<<3),
- *        MDIO_READ=(1<<1), MDIO_WRITE=(1<<0), CTRL_PROM=(1<<5)
- * ============================================================
+ *=============================================================
  */
 
 #include <stdlib.h>
