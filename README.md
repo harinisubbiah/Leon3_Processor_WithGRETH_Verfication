@@ -129,7 +129,3 @@ Implemented tests include:
 ## Author
 
 **Harini S**
-
-Memory Interface Bridge Verification Project
-
-2026
