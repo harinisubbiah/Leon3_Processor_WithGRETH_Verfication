@@ -4,43 +4,6 @@
  *  Design  : GR-XC3S-1500
  *  Tool    : VCS (Linux)
  *  Compiler: sparc-gaisler-elf-gcc
- *
- *  ROOT CAUSE OF ALL YOUR FAILURES — CTRL FLICKERING:
- *  ---------------------------------------------------
- *  The original test wrote CTRL_100MB directly into GRETH_CTRL
- *  BEFORE the PHY had finished its reset + auto-negotiation
- *  sequence. GRETH hardware monitors the PHY negotiation result
- *  and overwrites the speed bit (bit 7) in CTRL to match.
- *  So whatever you wrote got immediately overwritten → bit never
- *  sticks → 100MB check fails → speed mismatch → MDIO link fail
- *  → loopback frames never come back → RX all zeros.
- *
- *  THE FIX — mirrors greth_api.c greth_init() exactly:
- *  1. Soft-reset GRETH (safe — no EDCL in this design)
- *  2. Read PHY address from GRETH_MDIO bits[15:11]
- *  3. Reset PHY via MDIO (write 0x8000 to PHY reg 0)
- *  4. Wait for PHY reset bit to self-clear
- *  5. Wait for auto-negotiation to complete (PHY status bit 5)
- *  6. Read negotiated speed + duplex from PHY reg 0
- *  7. Write GRETH_CTRL ONCE with the result — no race, no flicker
- *
- *  PHY configuration (from phy.vhd + testbench.vhd):
- *  - base1000_t_fd=0, base1000_t_hd=0 → 10/100 only
- *  - On reset: speedsel="10" (100Mb), anegen=1, duplexmode=0
- *  - After auto-neg (anegcnt reaches 10): duplexmode=1 (full)
- *    because base100_x_fd=1 and tech_ability[3]=1
- *  - Expected result: 100Mb full-duplex
- *
- *  PHY ID values (from phy.vhd register decode):
- *  - PHY ID1 (reg 2) = 0xBBCD
- *  - PHY ID2 (reg 3) = 0x9C83
- *
- *  PHY loopback (from phy.vhd loopback_sel process):
- *  - r.ctrl.loopback must be '1'
- *  - Auto-neg must be OFF (anegen=0) so speed does not get
- *    overwritten by re-negotiation after we force it
- *  - Write: loopback | speedsel_100 | fullduplex (no aneg bit)
- * ============================================================
  */
 
 #include <stdlib.h>
