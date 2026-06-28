@@ -27,25 +27,16 @@ The work includes:
 
 ## Project Features
 
-✔ LEON3 + GRETH verification
-
-✔ Memory Interface Bridge
-
-✔ APB Bridge Verification
-
-✔ AHB Burst Verification
-
-✔ SRAM Memory Model
-
-✔ Protocol-compliant AHB Master
-
-✔ Synopsys VCS Simulation
-
-✔ Synopsys Design Compiler
-
-✔ Synopsys Formality
-
-✔ Synopsys LEDA
+- LEON3 + GRETH verification
+- Memory Interface Bridge
+- APB Bridge Verification
+- AHB Burst Verification
+- SRAM Memory Model
+- Protocol-compliant AHB Master
+- Synopsys VCS Simulation
+- Synopsys Design Compiler
+- Synopsys Formality
+- Synopsys LEDA
 
 ---
 
