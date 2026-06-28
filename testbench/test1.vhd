@@ -1,6 +1,6 @@
 -- ============================================================
 -- tb_bridge_top.vhd
--- Testbench for DUT: eth_module (bridge_top)
+-- Testbench for DUT: (bridge_top)
 -- Simulator: VCS
 -- ============================================================
 
@@ -88,7 +88,7 @@ architecture sim of tb_bridge_top is
   -- ============================================================
   -- DUT Component Declaration
   -- ============================================================
-  component bridge_module is
+  component bridge_top is
     generic (
       constant ABITS     : integer := 28;
     );
@@ -147,7 +147,7 @@ begin
   -- ============================================================
   -- DUT Instantiation
   -- ============================================================
-  DUT : bridge_module
+  DUT : bridge_top
     generic map (
       ABITS     => 28,
     )
@@ -394,14 +394,5 @@ begin
     report "Simulation finished" severity failure; -- Forces VCS to stop
 
   end process stimulus;
-
-  -- ============================================================
-  -- VCD Dump for waveform viewing (VCS compatible)
-  -- ============================================================
-  -- Use $dumpfile/$dumpvars in a verilog initial block
-  -- OR use the VCS command line: vcs -debug_all +vcs+dumpvars
-  -- For VHDL-only VCS, use UCLI or the following:
-  --   vcd on  / vcd file dump.vcd  (in UCLIscript)
-  -- ============================================================
 
 end architecture sim;
