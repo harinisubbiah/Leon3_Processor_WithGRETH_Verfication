@@ -4,51 +4,6 @@
  *  Design  : GR-XC3S-1500
  *  Tool    : VCS (Linux)
  *  Compiler: sparc-gaisler-elf-gcc
- *
- *  FIXES IN THIS VERSION:
- *
- *  FIX 1 — TE/RE dropping in Test 1 is NORMAL, not a bug.
- *    Doc: "As soon as GRETH encounters a disabled descriptor it
- *    will stop until TE/RE is set again."
- *    In Test 1 we write CTRL_TXEN|CTRL_RXEN with NO descriptors
- *    set up — GRETH finds nothing enabled and self-clears TE/RE.
- *    This is expected. Test 1 only checks register access so
- *    we removed CTRL_TXEN|CTRL_RXEN from the Test 1 CTRL write.
- *    TE and RE are only set when actual descriptors are ready
- *    (Tests 4 and 5).
- *
- *  FIX 2 — RE must be re-written after every RX IRQ in Test 5.
- *    Doc: "RE should be written with a one each time new
- *    descriptors are enabled."
- *    After GRETH receives a frame it clears that descriptor's
- *    EN bit. It then checks the next descriptor. If the next
- *    descriptor's EN bit is not yet set, GRETH stops and clears
- *    RE. In multi-frame test, if GRETH processes frames faster
- *    than our poll loop re-enables RE, it stops after frame 1
- *    and never receives frames 2 and 3. Fix: write CTRL with
- *    CTRL_RXEN again every time STS_RXIRQ fires.
- *    Same logic applies for CTRL_TXEN.
- *
- *  FIX 3 — GRETH internal descriptor pointer must be reset.
- *    After Test 4, GRETH's internal RX pointer advanced past
- *    descriptor 0. Writing GRETH_RXDESC resets the base address
- *    but the internal pointer offset stays. Fix: write
- *    GRETH_RXDESC and GRETH_TXDESC with the exact base address
- *    AFTER memset clears the descriptors and BEFORE enabling
- *    CTRL — this resets GRETH's pointer to descriptor 0.
- *
- *  FIX 4 — Error poll loop fix.
- *    WR(GRETH_STATUS, STS_ERRORS) was causing infinite loop
- *    because after an AHB error GRETH disables TX/RX engine
- *    and never sets TXIRQ/RXIRQ. Fixed: check error bits
- *    separately and break immediately, do not clear and retry.
- *
- *  KEPT FROM PREVIOUS VERSION:
- *  - MDIO_BUSY=(1<<3), MDIO_READ=(1<<1), MDIO_WRITE=(1<<0)
- *  - MDIO_PHYSHIFT=11, MDIO_REGSHIFT=6
- *  - CTRL_PROM=(1<<5) correct per PDF
- *  - memset(txd/rxd) before Test 5 setup
- *  - Pre+post poll in mdio_read/mdio_write
  * ============================================================
  */
 
