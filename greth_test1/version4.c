@@ -4,6 +4,7 @@
  *  Design  : GR-XC3S-1500
  *  Tool    : VCS (Linux)
  *  Compiler: sparc-gaisler-elf-gcc
+ *=============================================================
  */
 
 #include <stdlib.h>
