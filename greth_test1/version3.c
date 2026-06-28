@@ -5,42 +5,7 @@
  *  Tool    : VCS (Linux)
  *  Compiler: sparc-gaisler-elf-gcc
  *
- *  CHANGES FROM PREVIOUS VERSION (minimum changes only):
- *
- *  FIX 1 — CTRL_100MB removed from all WR(GRETH_CTRL,...) calls
- *           and "100Mbit bit set" check removed from Test 1.
- *    Why:  Per GRETH documentation: "Speed (SP) bit7 — Only used
- *          in RMII mode (rmii=1). A default value is automatically
- *          read from the PHY after reset."
- *          This design has rmii=0 (MII mode). In MII mode bit7
- *          does nothing — GRETH reads speed directly from the PHY
- *          MII clock frequency. Writing bit7 has no effect and
- *          reading it back always shows 0 in MII mode. That is
- *          why the "100Mbit bit set" check always failed.
- *          The speed IS 100Mb — GRETH just does not expose it
- *          through bit7 in MII mode.
- *
- *  FIX 2 — CTRL_PROM corrected from (1<<8) to (1<<5)
- *    Why:  Per GRETH documentation: "Promiscuous mode (PM) bit5".
- *          The old code had CTRL_PROM = (1<<8) which is bit8 =
- *          RESERVED per the doc. So promiscuous mode was NEVER
- *          actually being enabled. Without promiscuous mode GRETH
- *          filters out the loopback frame (broadcast destination
- *          does not match the programmed MAC address unless prom
- *          is set). That is why RX received nothing — the frame
- *          came back from the PHY but GRETH dropped it silently.
- *          Fixing this one bit fixes ALL RX failures.
- *
- *  FIX 3 — Test 3 busy-poll corrected
- *    Why:  while(GRETH_MDIO & 0x8) was checking the ADDRESS
- *          constant (0x80000D10) AND'd with 0x8, not the register
- *          value. 0x80000D10 & 0x8 = 0 so this loop exited
- *          immediately every time without actually waiting.
- *          Also 0x8 = bit3 which has no meaning in the MDIO
- *          register. MDIO_BUSY = bit0. Fixed to:
- *          while(RD(GRETH_MDIO) & MDIO_BUSY)
- * ============================================================
- */
+*/
 
 #include <stdlib.h>
 #include <stdio.h>
